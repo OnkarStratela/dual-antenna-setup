@@ -1,0 +1,14 @@
+# Compiled binary
+rfid_gc_live
+rfid_gc_live.exe
+
+# Object files
+*.o
+*.obj
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

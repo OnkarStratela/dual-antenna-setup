@@ -1,0 +1,94 @@
+# Dual-Antenna RFID Live Scanner
+
+Minimal CAEN RFID setup that continuously scans **two antennas**
+(`Source_0` and `Source_1`). After every sweep it prints **`[]`** while
+nothing is visible, then a merged **`[(ant) tag, …]`** line once tags appear.
+
+## Output format
+
+**Continuous stream:** one line after each full Src0→Src1 sweep (~every **`GC_SCAN_MS`** ms):
+
+When **no tags** — only brackets (no Tx prefix):
+
+```
+[]
+[]
+[]
+```
+
+When **one or both antennas** see tags — cyan Tx prefix plus a **single**
+merged bracket (antenna 0 first, then 1):
+
+```
+[TX=30 mW] [(0) EPC111, (1) EPC222]
+```
+
+Line rate defaults to **100 ms** between sweeps (≈ 10 `[ ]`/s idle). Tune
+with `GC_SCAN_MS` in `rfid_gc_live.c`.
+
+Colours on **non-empty** lines:
+
+- **`[TX …]`** → cyan *(omitted entirely on empty `[ ]` lines)*  
+- **`(antenna)`** → yellow · **`tagcode`** → green · **`@XmW`** cyan when Src0≠Src1 power  
+## Files
+
+| File | Purpose |
+|------|---------|
+| `rfid_gc_live.c` | The scanner program |
+| `compile_gc.sh`  | Compiles `rfid_gc_live.c` against the CAEN library |
+| `run_gc.sh`      | Fixes USB perms, compiles, then runs the scanner |
+| `SRC/`           | CAEN light library sources/headers (do not modify) |
+
+## How to run (Linux)
+
+1. Connect the CAEN reader via USB (it will appear as `/dev/ttyACM0`).
+2. From this folder:
+
+   ```bash
+   chmod +x run_gc.sh
+   ./run_gc.sh
+   ```
+
+   This will set `/dev/ttyACM0` permissions if needed, compile, and run
+   the scanner with the **default 30 mW** on both antennas.
+
+3. Press `Ctrl+C` to stop.
+
+## Tuning TX power (no rebuild required)
+
+Power can be passed as a command-line argument (in **mW**, range 1–316).
+After compiling once, run the binary directly:
+
+```bash
+./rfid_gc_live              # default: 30 mW on both antennas
+./rfid_gc_live 50           # 50 mW on both antennas
+./rfid_gc_live 30 80        # Source_0 = 30 mW, Source_1 = 80 mW
+./rfid_gc_live --help       # show usage
+```
+
+When two different powers are given, the program calls `SetPower` per
+antenna inside the scan loop, so each antenna effectively gets its own
+TX power level despite the CAEN library only exposing a global setting.
+
+### Recommended starting point for a 150 mm two-antenna setup
+
+- Boundary at the 75 mm midpoint → target read range ≈ 70 mm per antenna.
+- Start at **30 mW** (the default). If the reader rejects that value,
+  try `50`. If tags are missed within 6–7 cm, raise to `60–80`.
+- If the same tag flickers between `(0)` and `(1)` near the midpoint,
+  drop the power until each antenna only sees its own half.
+
+## Other configuration
+
+Edit the macros at the top of `rfid_gc_live.c` to change:
+
+- `GC_PORT` — serial port (e.g. `/dev/ttyUSB0`)
+- `DEFAULT_POWER_MW` — default power when no CLI args are given
+- `GC_SCAN_MS` — milliseconds between scan cycles
+
+## Troubleshooting
+
+If the reader fails to connect:
+- `sudo chmod 666 /dev/ttyACM0`
+- Or add yourself to the dialout group:
+  `sudo usermod -a -G dialout $USER` (then log out/in)
