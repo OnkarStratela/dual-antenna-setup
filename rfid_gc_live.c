@@ -7,9 +7,9 @@
 //   []
 //
 // Tags visible (shows TX so power stays obvious):
-//   [TX Source_0=30 Source_1=80 mW] [(0) @30mW EPC, (1) @80mW EPC]
+//   [TX …] [(0) @30mW EPC   ,   (1) @80mW EPC]
 //
-// Antenna number is printed in YELLOW, tag code in GREEN.
+// Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
 // Usage:
 //   ./rfid_gc_live                  -> both antennas at default power
@@ -41,6 +41,7 @@
 
 // ANSI colours
 #define GREEN  "\033[0;32m"
+#define RED    "\033[0;31m"
 #define YELLOW "\033[0;33m"
 #define CYAN   "\033[0;36m"
 #define RESET  "\033[0m"
@@ -121,14 +122,15 @@ static void print_sweep_line(uint32_t pwr[ANTENNA_COUNT], bool same_power,
     for (int ant = 0; ant < ANTENNA_COUNT; ant++) {
         for (int i = 0; i < cnt[ant]; i++) {
             if (!first_elem)
-                printf(", ");
+                printf(",   "); /* extra space between tag entries */
             first_elem = false;
 
             TagEntry *e = &bucket[ant][i];
+            const char *tagcol = (e->antenna == 0) ? GREEN : RED;
             printf(YELLOW "(%d)" RESET, e->antenna);
             if (!same_power)
                 printf(" @" CYAN "%u" RESET "mW", (unsigned)pwr[ant]);
-            printf(" " GREEN "%s" RESET, e->tag);
+            printf(" %s%s" RESET, tagcol, e->tag);
         }
     }
     printf("]\n");
