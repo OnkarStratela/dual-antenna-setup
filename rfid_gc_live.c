@@ -8,15 +8,16 @@
 //   []
 //
 // Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1).
-// Per-tag RSSI is printed in brackets right after the antenna number,
-// exactly as reported by the reader (no filtering, no arbitration).
-// Empty slots render as pure whitespace so the comma and the other slot
-// never shift columns:
-//   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,   (1)(-52) E2801160600002054E1A5678]
-//   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,                                    ]
-//   [TX=30 mW] [                                  ,   (1)(-52) E2801160600002054E1A5678]
+// Per-tag RSSI is printed in brackets right after the antenna number
+// in real dBm (one decimal place), exactly as reported by the reader
+// (no filtering, no arbitration). Empty slots render as pure whitespace
+// so the comma and the other slot never shift columns:
+//   [TX=30 mW] [(0)(-63.1) E2801160600002054E1A1234,   (1)(-65.0) E2801160600002054E1A5678]
+//   [TX=30 mW] [(0)(-63.1) E2801160600002054E1A1234,                                      ]
+//   [TX=30 mW] [                                    ,   (1)(-65.0) E2801160600002054E1A5678]
 //
-// Reader-reported RSSI is in tenths of dBm (e.g. -650 == -65.0 dBm).
+// The reader reports RSSI in tenths of dBm internally (e.g. raw -650
+// == -65.0 dBm); we just divide by 10.0 for display.
 //
 // Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
@@ -129,12 +130,14 @@ static void print_sweep_line(uint32_t power,
         }
 
         /* Visible width of the slot content (excludes ANSI codes) so we
-           can right-pad to SLOT_WIDTH and keep the ']' column stable. */
+           can right-pad to SLOT_WIDTH and keep the ']' column stable.
+           Reader RSSI is in tenths of dBm, so we display it as a real
+           dBm value with one decimal (e.g. raw -631 -> "-63.1"). */
         int visible = 3; /* "(N)" */
         for (int i = 0; i < cnt[ant]; i++) {
             char rbuf[16];
             int rlen = snprintf(rbuf, sizeof rbuf,
-                                "(%d) ", (int)bucket[ant][i].rssi);
+                                "(%.1f) ", bucket[ant][i].rssi / 10.0);
             if (i > 0) visible += 1; /* space between multiple tags */
             visible += rlen + (int)strlen(bucket[ant][i].tag);
         }
@@ -143,8 +146,8 @@ static void print_sweep_line(uint32_t power,
         printf(YELLOW "(%d)" RESET, ant);
         for (int i = 0; i < cnt[ant]; i++) {
             if (i > 0) printf(" ");
-            printf("(%d) %s%s" RESET,
-                   (int)bucket[ant][i].rssi,
+            printf("(%.1f) %s%s" RESET,
+                   bucket[ant][i].rssi / 10.0,
                    tagcol, bucket[ant][i].tag);
         }
         int pad = SLOT_WIDTH - visible;

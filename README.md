@@ -25,28 +25,29 @@ closing `]` never shift columns. An antenna that misses renders as pure
 whitespace — its `(N)` marker is **not** printed, so an empty slot can't
 be mistaken for a half-shown entry.
 
-Each tag shows its own **RSSI** in brackets right after the antenna
-number, in the form `(N)(rssi) <epc>`. The reader reports RSSI in
-**tenths of dBm** (e.g. `-650` means `-65.0 dBm`). The scanner prints
-every tag exactly as the reader returns it for each antenna — there is
-no filtering or cross-read arbitration in this version.
+Each tag shows its own **RSSI in dBm** (one decimal place) in brackets
+right after the antenna number, in the form `(N)(rssi) <epc>`. The
+reader stores RSSI internally as tenths of dBm and the scanner divides
+by 10.0 for display. The scanner prints every tag exactly as the reader
+returns it for each antenna — there is no filtering or cross-read
+arbitration in this version.
 
 When **both antennas** see a tag:
 
 ```
-[TX=30 mW] [(0)(-45) E2801160600002054E1A1234   ,   (1)(-52) E2801160600002054E1A5678   ]
+[TX=30 mW] [(0)(-63.1) E2801160600002054E1A1234 ,   (1)(-65.0) E2801160600002054E1A5678 ]
 ```
 
 When **only antenna 0** sees a tag (slot 1 is blank, columns unchanged):
 
 ```
-[TX=30 mW] [(0)(-45) E2801160600002054E1A1234   ,                                       ]
+[TX=30 mW] [(0)(-63.1) E2801160600002054E1A1234 ,                                       ]
 ```
 
 When **only antenna 1** sees a tag (slot 0 is blank, columns unchanged):
 
 ```
-[TX=30 mW] [                                    ,   (1)(-52) E2801160600002054E1A5678   ]
+[TX=30 mW] [                                    ,   (1)(-65.0) E2801160600002054E1A5678 ]
 ```
 
 Line rate defaults to **100 ms** between sweeps (≈ 10 `[ ]`/s idle). Tune
