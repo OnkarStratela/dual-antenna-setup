@@ -27,25 +27,9 @@ be mistaken for a half-shown entry.
 
 Each tag shows its own **RSSI** in brackets right after the antenna
 number, in the form `(N)(rssi) <epc>`. The reader reports RSSI in
-**tenths of dBm** (e.g. `-650` means `-65.0 dBm`).
-
-## Cross-read arbitration
-
-Because the two antennas' radiation fields overlap above the trays, the
-same tag is sometimes reported by both antennas in the same sweep. The
-scanner resolves this **per sweep** with one simple rule:
-
-- If the **same EPC** is reported by **both** antennas in a single
-  sweep, the entry on the antenna with the **lower** RSSI is dropped,
-  so the tag is printed only under the antenna that sees it strongest.
-- Tags reported by only one antenna in a sweep are passed through
-  unchanged (no suppression, no history).
-
-This is intentionally a per-sweep decision with **no learning period
-and no carry-over between sweeps** — every sweep is judged purely on
-the RSSI values returned in that sweep. New EPCs work immediately and
-the printed antenna can change instantly when the physical situation
-changes.
+**tenths of dBm** (e.g. `-650` means `-65.0 dBm`). The scanner prints
+every tag exactly as the reader returns it for each antenna — there is
+no filtering or cross-read arbitration in this version.
 
 When **both antennas** see a tag:
 

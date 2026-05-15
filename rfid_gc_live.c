@@ -8,23 +8,15 @@
 //   []
 //
 // Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1).
-// Per-tag RSSI in dBm is printed in brackets right after the antenna
-// number. Empty slots render as pure whitespace so the comma and the
-// other slot never shift columns:
+// Per-tag RSSI is printed in brackets right after the antenna number,
+// exactly as reported by the reader (no filtering, no arbitration).
+// Empty slots render as pure whitespace so the comma and the other slot
+// never shift columns:
 //   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,   (1)(-52) E2801160600002054E1A5678]
 //   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,                                    ]
 //   [TX=30 mW] [                                  ,   (1)(-52) E2801160600002054E1A5678]
 //
-// Cross-read arbitration:
-//   When the SAME EPC is reported by BOTH antennas in one sweep (this
-//   happens when the two antennas' fields overlap above a single tray),
-//   the tag is kept only on the antenna with the higher RSSI and is
-//   dropped from the other side. Tags seen by a single antenna in a
-//   sweep are passed through unchanged. The filter is per-sweep only:
-//   no history, no EMA, no learning period — each sweep is decided
-//   purely on the RSSI values reported in that sweep, which is what
-//   the downstream pour logic needs.
-//   Reader-reported RSSI is in tenths of dBm (e.g. -650 == -65.0 dBm).
+// Reader-reported RSSI is in tenths of dBm (e.g. -650 == -65.0 dBm).
 //
 // Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
@@ -210,8 +202,7 @@ int main(int argc, char **argv) {
     printf("Port      : %s @ %d baud\n", GC_PORT, GC_BAUDRATE);
     printf("Power     : %u mW (both antennas)\n", power);
     printf("Cycle     : %d ms\n", GC_SCAN_MS);
-    printf("Antennas  : %s, %s\n", sources[0], sources[1]);
-    printf("Arbitrate : on  (same-EPC on both antennas -> keep higher RSSI)\n\n");
+    printf("Antennas  : %s, %s\n\n", sources[0], sources[1]);
 
     printf("[GC] Connecting...\n");
     ec = CAENRFID_Connect(&reader, CAENRFID_RS232, &port_params);
@@ -280,35 +271,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* --- Cross-read arbitration -----------------------------------
-           Build filtered buckets where, for any EPC seen by BOTH
-           antennas in this sweep, only the side with the higher RSSI
-           is kept. Tags seen on a single antenna are passed through
-           untouched. Purely per-sweep; no history kept across sweeps. */
-        TagEntry filt_bucket[ANTENNA_COUNT][GC_MAX_TAGS];
-        int      filt_cnt[ANTENNA_COUNT] = { 0, 0 };
-
-        for (int ant = 0; ant < ANTENNA_COUNT; ant++) {
-            int other = 1 - ant;
-            for (int i = 0; i < cnt[ant]; i++) {
-                bool drop = false;
-                for (int j = 0; j < cnt[other]; j++) {
-                    if (strcmp(bucket[ant][i].tag, bucket[other][j].tag) != 0)
-                        continue;
-                    /* Same EPC on the other antenna: drop this side if
-                       its RSSI is strictly weaker. Ties go to antenna 0
-                       (i.e. when ant == 1 and RSSIs are equal, drop). */
-                    if (bucket[ant][i].rssi < bucket[other][j].rssi ||
-                        (bucket[ant][i].rssi == bucket[other][j].rssi && ant == 1)) {
-                        drop = true;
-                    }
-                    break;
-                }
-                if (!drop) filt_bucket[ant][filt_cnt[ant]++] = bucket[ant][i];
-            }
-        }
-
-        print_sweep_line(power, filt_bucket, filt_cnt);
+        print_sweep_line(power, bucket, cnt);
 
         usleep(GC_SCAN_MS * 1000);
     }
