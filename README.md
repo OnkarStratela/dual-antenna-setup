@@ -32,21 +32,20 @@ number, in the form `(N)(rssi) <epc>`. The reader reports RSSI in
 ## Cross-read arbitration
 
 Because the two antennas' radiation fields overlap above the trays, the
-same tag often gets reported by the "wrong" antenna. The scanner
-filters this out automatically:
+same tag is sometimes reported by both antennas in the same sweep. The
+scanner resolves this **per sweep** with one simple rule:
 
-- For every EPC it sees, it keeps a rolling-average RSSI **per
-  antenna** (exponential moving average, `alpha = 1/8`).
-- The antenna with the higher long-term average becomes that tag's
-  **owner**. Reads from the non-owner antenna are silently dropped.
-- A small **hysteresis** (default `3.0 dB`, `RSSI_HYSTERESIS` in the
-  source) keeps the owner from flipping back and forth when the two
-  averages are nearly equal.
+- If the **same EPC** is reported by **both** antennas in a single
+  sweep, the entry on the antenna with the **lower** RSSI is dropped,
+  so the tag is printed only under the antenna that sees it strongest.
+- Tags reported by only one antenna in a sweep are passed through
+  unchanged (no suppression, no history).
 
-Net result: a mug sitting steadily over tray 0 will show up only under
-`(0)`, even if `Source_1` is also picking it up via field spill-over.
-If you physically move the mug to the other tray, the rolling average
-shifts over a few seconds and the owner switches.
+This is intentionally a per-sweep decision with **no learning period
+and no carry-over between sweeps** — every sweep is judged purely on
+the RSSI values returned in that sweep. New EPCs work immediately and
+the printed antenna can change instantly when the physical situation
+changes.
 
 When **both antennas** see a tag:
 
