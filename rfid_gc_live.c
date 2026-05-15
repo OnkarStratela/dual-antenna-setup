@@ -7,10 +7,12 @@
 // Empty (no tags in range — shows activity without extra noise):
 //   []
 //
-// Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1):
-//   [TX=30 mW] [(0) EPC111,   (1) EPC222]   // both antennas see a tag
-//   [TX=30 mW] [(0) EPC111,   (1) ]         // only antenna 0 sees a tag
-//   [TX=30 mW] [(0) ,         (1) EPC222]   // only antenna 1 sees a tag
+// Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1).
+// Empty slots render as pure whitespace so the comma and the other slot
+// never shift columns:
+//   [TX=30 mW] [(0) EPC111             ,   (1) EPC222             ]
+//   [TX=30 mW] [(0) EPC111             ,                          ]
+//   [TX=30 mW] [                       ,   (1) EPC222             ]
 //
 // Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
@@ -88,11 +90,17 @@ static void handle_sigint(int sig) {
     running = 0;
 }
 
+// Width (visible chars, ignoring ANSI colour codes) reserved for each
+// antenna slot inside the brackets. Comfortably fits "(N) " + a 24-char
+// EPC-96 hex string; longer tags overflow without truncation.
+#define SLOT_WIDTH 28
+
 // Sweep output:
 //   - bare [] when no antenna saw any tag
-//   - otherwise: [TX=…] [(0) <tag-or-blank>,   (1) <tag-or-blank>]
-//     Slot 0 is ALWAYS antenna 0, slot 1 is ALWAYS antenna 1, so the
-//     position is stable even when one antenna misses.
+//   - otherwise: [TX=…] [<slot0>,   <slot1>]
+//     Each slot is padded to SLOT_WIDTH. If an antenna missed, its slot
+//     is pure whitespace (no "(N)"), so the comma and the other slot
+//     keep their column positions and nothing shifts.
 static void print_sweep_line(uint32_t power,
                              TagEntry bucket[ANTENNA_COUNT][GC_MAX_TAGS],
                              const int cnt[ANTENNA_COUNT])
@@ -109,15 +117,27 @@ static void print_sweep_line(uint32_t power,
         if (ant > 0)
             printf(",   "); /* fixed separator between the two slots */
 
-        printf(YELLOW "(%d)" RESET " ", ant);
+        if (cnt[ant] == 0) {
+            printf("%*s", SLOT_WIDTH, "");
+            continue;
+        }
+
+        /* Visible width of the slot content (excludes ANSI codes) so we
+           can right-pad to SLOT_WIDTH and keep the ']' column stable. */
+        int visible = 4; /* "(N) " */
+        for (int i = 0; i < cnt[ant]; i++) {
+            visible += (int)strlen(bucket[ant][i].tag);
+            if (i > 0) visible += 1; /* space between multiple tags */
+        }
 
         const char *tagcol = (ant == 0) ? GREEN : RED;
+        printf(YELLOW "(%d)" RESET " ", ant);
         for (int i = 0; i < cnt[ant]; i++) {
             if (i > 0) printf(" ");
             printf("%s%s" RESET, tagcol, bucket[ant][i].tag);
         }
-        /* if cnt[ant] == 0, nothing is printed after "(N) " — the slot
-           stays in place but is visibly empty. */
+        int pad = SLOT_WIDTH - visible;
+        if (pad > 0) printf("%*s", pad, "");
     }
     printf("]\n");
     fflush(stdout);

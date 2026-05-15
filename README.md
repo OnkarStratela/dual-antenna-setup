@@ -20,22 +20,27 @@ When **no tags** — only brackets (no Tx prefix):
 []
 ```
 
+Each slot is padded to a fixed visible width, so the comma and the
+closing `]` never shift columns. An antenna that misses renders as pure
+whitespace — its `(N)` marker is **not** printed, so an empty slot can't
+be mistaken for a half-shown entry.
+
 When **both antennas** see a tag:
 
 ```
-[TX=30 mW] [(0) EPC111,   (1) EPC222]
+[TX=30 mW] [(0) EPC111             ,   (1) EPC222             ]
 ```
 
-When **only antenna 0** sees a tag (slot 1 stays in place, empty):
+When **only antenna 0** sees a tag (slot 1 is blank, columns unchanged):
 
 ```
-[TX=30 mW] [(0) EPC111,   (1) ]
+[TX=30 mW] [(0) EPC111             ,                          ]
 ```
 
-When **only antenna 1** sees a tag (slot 0 stays in place, empty):
+When **only antenna 1** sees a tag (slot 0 is blank, columns unchanged):
 
 ```
-[TX=30 mW] [(0) ,   (1) EPC222]
+[TX=30 mW] [                       ,   (1) EPC222             ]
 ```
 
 Line rate defaults to **100 ms** between sweeps (≈ 10 `[ ]`/s idle). Tune
