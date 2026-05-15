@@ -25,8 +25,28 @@ closing `]` never shift columns. An antenna that misses renders as pure
 whitespace — its `(N)` marker is **not** printed, so an empty slot can't
 be mistaken for a half-shown entry.
 
-Each tag shows its own **RSSI in dBm** in brackets right after the
-antenna number, in the form `(N)(rssi) <epc>`.
+Each tag shows its own **RSSI** in brackets right after the antenna
+number, in the form `(N)(rssi) <epc>`. The reader reports RSSI in
+**tenths of dBm** (e.g. `-650` means `-65.0 dBm`).
+
+## Cross-read arbitration
+
+Because the two antennas' radiation fields overlap above the trays, the
+same tag often gets reported by the "wrong" antenna. The scanner
+filters this out automatically:
+
+- For every EPC it sees, it keeps a rolling-average RSSI **per
+  antenna** (exponential moving average, `alpha = 1/8`).
+- The antenna with the higher long-term average becomes that tag's
+  **owner**. Reads from the non-owner antenna are silently dropped.
+- A small **hysteresis** (default `3.0 dB`, `RSSI_HYSTERESIS` in the
+  source) keeps the owner from flipping back and forth when the two
+  averages are nearly equal.
+
+Net result: a mug sitting steadily over tray 0 will show up only under
+`(0)`, even if `Source_1` is also picking it up via field spill-over.
+If you physically move the mug to the other tray, the rolling average
+shifts over a few seconds and the owner switches.
 
 When **both antennas** see a tag:
 
