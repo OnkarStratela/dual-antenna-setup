@@ -1,21 +1,23 @@
 // rfid_gc_live.c
-// Live-state RFID scanner using two antennas.
+// Live-state RFID scanner using two antennas (Source_0 and Source_1).
 //
-// Every sweep (continuous), prints a single line while scanning runs:
+// Every sweep (continuous), prints a single line while scanning runs.
+// The output uses FIXED SLOTS so tags never shift positions:
 //
 // Empty (no tags in range — shows activity without extra noise):
 //   []
 //
-// Tags visible (shows TX so power stays obvious):
-//   [TX …] [(0) @30mW EPC   ,   (1) @80mW EPC]
+// Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1):
+//   [TX=30 mW] [(0) EPC111,   (1) EPC222]   // both antennas see a tag
+//   [TX=30 mW] [(0) EPC111,   (1) ]         // only antenna 0 sees a tag
+//   [TX=30 mW] [(0) ,         (1) EPC222]   // only antenna 1 sees a tag
 //
 // Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
 // Usage:
-//   ./rfid_gc_live                  -> both antennas at default power
-//   ./rfid_gc_live <mW>             -> both antennas at <mW>
-//   ./rfid_gc_live <mW0> <mW1>      -> Source_0 at mW0, Source_1 at mW1
-//   ./rfid_gc_live -h | --help      -> show usage
+//   ./rfid_gc_live              -> both antennas at default power
+//   ./rfid_gc_live <mW>         -> both antennas at <mW> (global power)
+//   ./rfid_gc_live -h | --help  -> show usage
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,12 +64,11 @@ static void hex_str(uint8_t *bytes, uint16_t len, char *out) {
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage:\n"
-        "  %s                  both antennas at %d mW (default)\n"
-        "  %s <mW>             both antennas at <mW>\n"
-        "  %s <mW0> <mW1>      Source_0 at mW0, Source_1 at mW1\n"
-        "  %s -h | --help      show this message\n"
+        "  %s              both antennas at %d mW (default)\n"
+        "  %s <mW>         both antennas at <mW> (global power)\n"
+        "  %s -h | --help  show this message\n"
         "\nValid power range: %d..%d mW\n",
-        prog, DEFAULT_POWER_MW, prog, prog, prog,
+        prog, DEFAULT_POWER_MW, prog, prog,
         MIN_POWER_MW, MAX_POWER_MW);
 }
 
@@ -87,51 +88,36 @@ static void handle_sigint(int sig) {
     running = 0;
 }
 
-static void fmt_tx_power_prefix(char *buf, size_t cap,
-                                uint32_t pwr[ANTENNA_COUNT],
-                                bool same_power) {
-    /* Shown before every snapshot so the CLI power settings are always visible. */
-    if (same_power)
-        snprintf(buf, cap,
-                 CYAN "[TX=%u mW]" RESET,
-                 (unsigned)pwr[0]);
-    else
-        snprintf(buf, cap,
-                 CYAN "[TX Source_0=%u Source_1=%u mW]" RESET,
-                 (unsigned)pwr[0], (unsigned)pwr[1]);
-}
-
-// Sweep output: bare [] when idle; Tx prefix only when listing tags (merged Src0→Src1 order).
-static void print_sweep_line(uint32_t pwr[ANTENNA_COUNT], bool same_power,
+// Sweep output:
+//   - bare [] when no antenna saw any tag
+//   - otherwise: [TX=…] [(0) <tag-or-blank>,   (1) <tag-or-blank>]
+//     Slot 0 is ALWAYS antenna 0, slot 1 is ALWAYS antenna 1, so the
+//     position is stable even when one antenna misses.
+static void print_sweep_line(uint32_t power,
                              TagEntry bucket[ANTENNA_COUNT][GC_MAX_TAGS],
                              const int cnt[ANTENNA_COUNT])
 {
-    int total = cnt[0] + cnt[1];
-    if (total == 0) {
+    if (cnt[0] == 0 && cnt[1] == 0) {
         printf("[]\n");
         fflush(stdout);
         return;
     }
 
-    char pfx[96];
-    fmt_tx_power_prefix(pfx, sizeof pfx, pwr, same_power);
-    printf("%s ", pfx);
+    printf(CYAN "[TX=%u mW]" RESET " [", (unsigned)power);
 
-    printf("[");
-    bool first_elem = true;
     for (int ant = 0; ant < ANTENNA_COUNT; ant++) {
-        for (int i = 0; i < cnt[ant]; i++) {
-            if (!first_elem)
-                printf(",   "); /* extra space between tag entries */
-            first_elem = false;
+        if (ant > 0)
+            printf(",   "); /* fixed separator between the two slots */
 
-            TagEntry *e = &bucket[ant][i];
-            const char *tagcol = (e->antenna == 0) ? GREEN : RED;
-            printf(YELLOW "(%d)" RESET, e->antenna);
-            if (!same_power)
-                printf(" @" CYAN "%u" RESET "mW", (unsigned)pwr[ant]);
-            printf(" %s%s" RESET, tagcol, e->tag);
+        printf(YELLOW "(%d)" RESET " ", ant);
+
+        const char *tagcol = (ant == 0) ? GREEN : RED;
+        for (int i = 0; i < cnt[ant]; i++) {
+            if (i > 0) printf(" ");
+            printf("%s%s" RESET, tagcol, bucket[ant][i].tag);
         }
+        /* if cnt[ant] == 0, nothing is printed after "(N) " — the slot
+           stays in place but is visibly empty. */
     }
     printf("]\n");
     fflush(stdout);
@@ -139,33 +125,21 @@ static void print_sweep_line(uint32_t pwr[ANTENNA_COUNT], bool same_power,
 
 int main(int argc, char **argv) {
 
-    uint32_t power[ANTENNA_COUNT] = { DEFAULT_POWER_MW, DEFAULT_POWER_MW };
+    uint32_t power = DEFAULT_POWER_MW;
 
     if (argc == 2) {
         if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
             usage(argv[0]);
             return 0;
         }
-        uint32_t p;
-        if (!parse_power(argv[1], &p)) {
+        if (!parse_power(argv[1], &power)) {
             usage(argv[0]);
             return 1;
         }
-        power[0] = power[1] = p;
-    } else if (argc == 3) {
-        uint32_t p0, p1;
-        if (!parse_power(argv[1], &p0) || !parse_power(argv[2], &p1)) {
-            usage(argv[0]);
-            return 1;
-        }
-        power[0] = p0;
-        power[1] = p1;
     } else if (argc != 1) {
         usage(argv[0]);
         return 1;
     }
-
-    bool same_power = (power[0] == power[1]);
 
     CAENRFIDErrorCodes ec;
     CAENRFIDReader reader = {
@@ -195,12 +169,7 @@ int main(int argc, char **argv) {
 
     printf(CYAN "===== Dual-Antenna RFID Live Scanner =====" RESET "\n");
     printf("Port      : %s @ %d baud\n", GC_PORT, GC_BAUDRATE);
-    if (same_power) {
-        printf("Power     : %u mW (both antennas)\n", power[0]);
-    } else {
-        printf("Power     : %s=%u mW, %s=%u mW\n",
-               sources[0], power[0], sources[1], power[1]);
-    }
+    printf("Power     : %u mW (both antennas)\n", power);
     printf("Cycle     : %d ms\n", GC_SCAN_MS);
     printf("Antennas  : %s, %s\n\n", sources[0], sources[1]);
 
@@ -218,13 +187,11 @@ int main(int argc, char **argv) {
     if (ec == CAENRFID_StatusOK)
         printf("[GC] Reader: %s  Serial: %s\n", model, serial);
 
-    if (same_power) {
-        ec = CAENRFID_SetPower(&reader, power[0]);
-        if (ec != CAENRFID_StatusOK) {
-            printf("[GC] WARNING: SetPower(%u) returned %d -- "
-                   "value may be below the reader's hardware floor.\n",
-                   power[0], ec);
-        }
+    ec = CAENRFID_SetPower(&reader, power);
+    if (ec != CAENRFID_StatusOK) {
+        printf("[GC] WARNING: SetPower(%u) returned %d -- "
+               "value may be below the reader's hardware floor.\n",
+               power, ec);
     }
     printf("[GC] Ready. Empty sweeps print []. Tagged sweeps prepend [TX …]. Ctrl+C to stop.\n\n");
 
@@ -241,10 +208,6 @@ int main(int argc, char **argv) {
         for (int ant = 0; ant < ANTENNA_COUNT && running; ant++) {
             CAENRFIDTagList *tag_list = NULL, *node;
             uint16_t num_tags = 0;
-
-            if (!same_power) {
-                CAENRFID_SetPower(&reader, power[ant]);
-            }
 
             ec = CAENRFID_InventoryTag(&reader, (char *)sources[ant],
                                        0, 0, 0,
@@ -276,7 +239,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        print_sweep_line(power, same_power, bucket, cnt);
+        print_sweep_line(power, bucket, cnt);
 
         usleep(GC_SCAN_MS * 1000);
     }

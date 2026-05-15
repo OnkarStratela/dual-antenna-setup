@@ -1,12 +1,16 @@
 # Dual-Antenna RFID Live Scanner
 
 Minimal CAEN RFID setup that continuously scans **two antennas**
-(`Source_0` and `Source_1`). After every sweep it prints **`[]`** while
-nothing is visible, then a merged **`[(ant) tag, …]`** line once tags appear.
+(`Source_0` and `Source_1`) at a **single global TX power**. After every
+sweep it prints **`[]`** while nothing is visible, then a fixed-slot
+**`[(0) tag, (1) tag]`** line once tags appear.
 
 ## Output format
 
-**Continuous stream:** one line after each full Src0→Src1 sweep (~every **`GC_SCAN_MS`** ms):
+**Continuous stream:** one line after each full Src0→Src1 sweep (~every **`GC_SCAN_MS`** ms).
+
+The output uses **fixed slots** so tags never shift between positions —
+slot 0 is always antenna 0, slot 1 is always antenna 1.
 
 When **no tags** — only brackets (no Tx prefix):
 
@@ -16,11 +20,22 @@ When **no tags** — only brackets (no Tx prefix):
 []
 ```
 
-When **one or both antennas** see tags — cyan Tx prefix plus a **single**
-merged bracket (antenna 0 first, then 1):
+When **both antennas** see a tag:
 
 ```
-[TX=30 mW] [(0) EPC111, (1) EPC222]
+[TX=30 mW] [(0) EPC111,   (1) EPC222]
+```
+
+When **only antenna 0** sees a tag (slot 1 stays in place, empty):
+
+```
+[TX=30 mW] [(0) EPC111,   (1) ]
+```
+
+When **only antenna 1** sees a tag (slot 0 stays in place, empty):
+
+```
+[TX=30 mW] [(0) ,   (1) EPC222]
 ```
 
 Line rate defaults to **100 ms** between sweeps (≈ 10 `[ ]`/s idle). Tune
@@ -28,8 +43,9 @@ with `GC_SCAN_MS` in `rfid_gc_live.c`.
 
 Colours on **non-empty** lines:
 
-- **`[TX …]`** → cyan *(omitted entirely on empty `[ ]` lines)*  
-- **`(antenna)`** → yellow · **`tagcode`** → green · **`@XmW`** cyan when Src0≠Src1 power  
+- **`[TX …]`** → cyan *(omitted entirely on empty `[ ]` lines)*
+- **`(antenna)`** → yellow · Src0 tag → green · Src1 tag → red
+
 ## Files
 
 | File | Purpose |
@@ -56,19 +72,15 @@ Colours on **non-empty** lines:
 
 ## Tuning TX power (no rebuild required)
 
-Power can be passed as a command-line argument (in **mW**, range 1–316).
-After compiling once, run the binary directly:
+Power is a **single global value** applied to both antennas. Pass it as a
+command-line argument (in **mW**, range 1–316). After compiling once,
+run the binary directly:
 
 ```bash
-./rfid_gc_live              # default: 30 mW on both antennas
-./rfid_gc_live 50           # 50 mW on both antennas
-./rfid_gc_live 30 80        # Source_0 = 30 mW, Source_1 = 80 mW
+./rfid_gc_live              # default: 30 mW (both antennas)
+./rfid_gc_live 50           # 50 mW (both antennas)
 ./rfid_gc_live --help       # show usage
 ```
-
-When two different powers are given, the program calls `SetPower` per
-antenna inside the scan loop, so each antenna effectively gets its own
-TX power level despite the CAEN library only exposing a global setting.
 
 ### Recommended starting point for a 150 mm two-antenna setup
 
@@ -76,7 +88,7 @@ TX power level despite the CAEN library only exposing a global setting.
 - Start at **30 mW** (the default). If the reader rejects that value,
   try `50`. If tags are missed within 6–7 cm, raise to `60–80`.
 - If the same tag flickers between `(0)` and `(1)` near the midpoint,
-  drop the power until each antenna only sees its own half.
+  drop the global power until each antenna only sees its own half.
 
 ## Other configuration
 
