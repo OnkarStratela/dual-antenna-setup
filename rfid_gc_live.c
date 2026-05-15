@@ -8,11 +8,12 @@
 //   []
 //
 // Tags visible (slot 0 is always antenna 0, slot 1 is always antenna 1).
-// Empty slots render as pure whitespace so the comma and the other slot
-// never shift columns:
-//   [TX=30 mW] [(0) EPC111             ,   (1) EPC222             ]
-//   [TX=30 mW] [(0) EPC111             ,                          ]
-//   [TX=30 mW] [                       ,   (1) EPC222             ]
+// Per-tag RSSI in dBm is printed in brackets right after the antenna
+// number. Empty slots render as pure whitespace so the comma and the
+// other slot never shift columns:
+//   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,   (1)(-52) E2801160600002054E1A5678]
+//   [TX=30 mW] [(0)(-45) E2801160600002054E1A1234,                                    ]
+//   [TX=30 mW] [                                  ,   (1)(-52) E2801160600002054E1A5678]
 //
 // Antenna index in YELLOW; Src0 tag EPC in GREEN, Src1 tag EPC in RED.
 //
@@ -53,8 +54,9 @@
 volatile int running = 0;
 
 typedef struct {
-    char tag[2 * MAX_ID_LENGTH + 1];
-    int  antenna;
+    char    tag[2 * MAX_ID_LENGTH + 1];
+    int     antenna;
+    int16_t rssi;        /* dBm, as reported by the reader */
 } TagEntry;
 
 static void hex_str(uint8_t *bytes, uint16_t len, char *out) {
@@ -91,9 +93,10 @@ static void handle_sigint(int sig) {
 }
 
 // Width (visible chars, ignoring ANSI colour codes) reserved for each
-// antenna slot inside the brackets. Comfortably fits "(N) " + a 24-char
-// EPC-96 hex string; longer tags overflow without truncation.
-#define SLOT_WIDTH 28
+// antenna slot inside the brackets. Comfortably fits
+// "(N)(-XXX) " + a 24-char EPC-96 hex string; longer tags overflow
+// without truncation.
+#define SLOT_WIDTH 36
 
 // Sweep output:
 //   - bare [] when no antenna saw any tag
@@ -124,17 +127,22 @@ static void print_sweep_line(uint32_t power,
 
         /* Visible width of the slot content (excludes ANSI codes) so we
            can right-pad to SLOT_WIDTH and keep the ']' column stable. */
-        int visible = 4; /* "(N) " */
+        int visible = 3; /* "(N)" */
         for (int i = 0; i < cnt[ant]; i++) {
-            visible += (int)strlen(bucket[ant][i].tag);
+            char rbuf[16];
+            int rlen = snprintf(rbuf, sizeof rbuf,
+                                "(%d) ", (int)bucket[ant][i].rssi);
             if (i > 0) visible += 1; /* space between multiple tags */
+            visible += rlen + (int)strlen(bucket[ant][i].tag);
         }
 
         const char *tagcol = (ant == 0) ? GREEN : RED;
-        printf(YELLOW "(%d)" RESET " ", ant);
+        printf(YELLOW "(%d)" RESET, ant);
         for (int i = 0; i < cnt[ant]; i++) {
             if (i > 0) printf(" ");
-            printf("%s%s" RESET, tagcol, bucket[ant][i].tag);
+            printf("(%d) %s%s" RESET,
+                   (int)bucket[ant][i].rssi,
+                   tagcol, bucket[ant][i].tag);
         }
         int pad = SLOT_WIDTH - visible;
         if (pad > 0) printf("%*s", pad, "");
@@ -242,6 +250,7 @@ int main(int argc, char **argv) {
                         hex_str(node->Tag.ID, node->Tag.Length,
                                 bucket[ant][cnt[ant]].tag);
                         bucket[ant][cnt[ant]].antenna = ant;
+                        bucket[ant][cnt[ant]].rssi    = node->Tag.RSSI;
                         cnt[ant]++;
                     }
                     CAENRFIDTagList *next = node->Next;
