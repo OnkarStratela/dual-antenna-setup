@@ -211,6 +211,7 @@ typedef enum {
     TID_READING             = 0x0010,
     EVENT_TRIGGER           = 0x0020,
     XPC                     = 0x0040,
+    PHASE                   = 0x0080,   /* request phase AVP after RSSI */
     PC                      = 0x0100
 } CAENRFID_InventoryFlag;
 
@@ -296,6 +297,7 @@ typedef struct CAENRFIDTag_s {
     uint32_t            TimeStamp[2];
     CAENRFIDProtocol    Type;
     int16_t             RSSI;
+    int16_t             Phase;       /* raw phase AVP value, 0 if not provided */
     uint8_t             TID[MAX_TID_SIZE];
     uint16_t            TIDLen;
     uint8_t             XPC[XPC_LENGTH];
@@ -322,6 +324,7 @@ typedef struct CAENRFIDInventoryParams_s {
     bool has_event_trigger;
     bool has_XPC;
     bool has_PC;
+    bool has_PHASE;
 } CAENRFIDInventoryParams;
 
 /*

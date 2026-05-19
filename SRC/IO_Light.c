@@ -226,6 +226,7 @@ int16_t getAVP(IOBuffer_t *buf, uint16_t wtype, void *value)
         case AVP_TAGTYPE:
         case AVP_COMMAND:
         case AVP_RSSI:
+        case AVP_PHASE:
         case AVP_MODULATION:
         case AVP_BOOLEAN:
         case AVP_RFCHANNEL:

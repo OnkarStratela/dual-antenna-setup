@@ -1471,11 +1471,12 @@ CAENRFIDErrorCodes CAENRFID_InventoryTag(CAENRFIDReader* reader,
     IOBuffer_t rxtxbuf = {0};
     bool has_RSSI = false, has_compact = false, has_TID = false,
          has_XPC = false, has_PC = false, has_event_trigger = false,
-         has_framed = false, has_continuous = false, has_mask = false;
+         has_framed = false, has_continuous = false, has_mask = false,
+         has_PHASE = false;
     CAENRFIDTagList* list_el = NULL;
     uint16_t type = 0;
 
-    flag &= 0x017f;
+    flag &= 0x01ff;
     if((flag & RSSI) == RSSI) has_RSSI =1;
     if((flag & FRAMED) == FRAMED) has_framed = 1;
     if((flag & CONTINUOS) == CONTINUOS) has_continuous = 1;
@@ -1483,6 +1484,7 @@ CAENRFIDErrorCodes CAENRFID_InventoryTag(CAENRFIDReader* reader,
     if((flag & TID_READING) == TID_READING) has_TID = 1;
     if((flag & EVENT_TRIGGER) == EVENT_TRIGGER) has_event_trigger = 1;
     if((flag & XPC) == 0x40) has_XPC = 1;
+    if((flag & PHASE) == 0x80) has_PHASE = 1;
     if((flag & PC) == 0x100) has_PC = 1;
 
     if(has_continuous != has_framed) return CAENRFID_InvalidParam;
@@ -1568,6 +1570,16 @@ CAENRFIDErrorCodes CAENRFID_InventoryTag(CAENRFIDReader* reader,
            {
                if(getAVP(&rxtxbuf, AVP_RSSI, &(list_el->Tag.RSSI))  != 0) break;
            }
+           if(has_PHASE)
+           {
+               /* Soft-fail: some firmwares ignore the PHASE bit and omit
+                  the AVP. getAVP() returns 1 on type mismatch without
+                  advancing rpos, so leaving Phase=0 and continuing keeps
+                  the rest of the response parseable. */
+               int16_t _pret = getAVP(&rxtxbuf, AVP_PHASE, &(list_el->Tag.Phase));
+               if(_pret < 0) break;
+               if(_pret > 0) list_el->Tag.Phase = 0;
+           }
            if(has_TID)
            {
                if(getAVP(&rxtxbuf, AVP_LENGTH, &(list_el->Tag.TIDLen))  != 0) break;
@@ -1603,6 +1615,7 @@ CAENRFIDErrorCodes CAENRFID_InventoryTag(CAENRFIDReader* reader,
         reader->_inventory_params.has_event_trigger = has_event_trigger;
         reader->_inventory_params.has_XPC = has_XPC;
         reader->_inventory_params.has_PC = has_PC;
+        reader->_inventory_params.has_PHASE = has_PHASE;
         ret = CAENRFID_StatusOK;
     }
 
