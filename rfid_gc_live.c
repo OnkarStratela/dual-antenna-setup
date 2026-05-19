@@ -247,6 +247,10 @@ int main(int argc, char **argv) {
     if (ec == CAENRFID_StatusOK)
         printf("[GC] Reader: %s  Serial: %s\n", model, serial);
 
+    char fwrel[MAX_FWREL_LENGTH + 1] = {0};
+    if (CAENRFID_GetFirmwareRelease(&reader, fwrel) == CAENRFID_StatusOK)
+        printf("[GC] Firmware: %s\n", fwrel);
+
     ec = CAENRFID_SetPower(&reader, power);
     if (ec != CAENRFID_StatusOK) {
         printf("[GC] WARNING: SetPower(%u) returned %d -- "
