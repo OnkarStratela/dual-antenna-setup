@@ -62,28 +62,44 @@ same tag to be reported on both antennas.
 
 State machine per EPC:
 
-1. **Deciding** — every sweep it polls both antennas and picks the candidate
-   owner = the stronger antenna (or the only antenna that read it).
-2. **Commit** — the candidate is locked in once **one antenna dominates the
-   reads** — its read-rate ≥ `READ_HI` while the other's ≤ `READ_LO` — for
-   `CONFIRM_STREAK` consecutive sweeps. Each sweep fires `INV_PER_SWEEP`
-   inventories per antenna; the fraction that see the tag feeds a smoothed
-   read-rate per antenna. If **both** antennas keep reading the tag (power too
-   high to separate) the tag stays **pending** and the live line shows
-   `BOTH-lower-power` so you know to drop the power.
+1. **Deciding** — every sweep fires `INV_PER_SWEEP` inventories on each antenna
+   and counts how many saw the tag.
+2. **Commit** — the binding is locked in once **one antenna reads the tag
+   solidly** (≥ `READ_MIN_HITS` of `INV_PER_SWEEP`) **while the other reads it
+   zero times**, held for `CONFIRM_STREAK` consecutive sweeps. If **both**
+   antennas hear the tag the sweep is not decisive (and the power controller is
+   busy lowering power — see below).
 3. **Latched** — once owned, the binding is held. Reads of that EPC on the
    *other* antenna are ignored, so no live flips, so no overlap.
 4. **Release** — when the tag is seen by **neither** antenna for `RELEASE_MS`
    (the mug was lifted), the binding is cleared and the next placement is
    decided fresh.
 
+## Automatic power tuning (no magic numbers)
+
+The clean-separation power is **not a fixed value** — it differs between the two
+ports (the ~4 dB bias) and with beer in the tray. So the tool tunes it itself,
+every cycle:
+
+- a tag heard by **both** antennas ⇒ power too high (cross-read) ⇒ **step down**;
+- a present tag **not read solidly** by either ⇒ too low (beer/distance) ⇒ **step up**;
+- otherwise ⇒ **hold** (settled).
+
+The status line shows the live power and state: `tuning down`, `tuning up`,
+`settled`, or a warning if it cannot win: `OVERLAP@floor!` (both antennas still
+hear the tag even at minimum power — the antennas physically overlap at the mug
+location) or `TOO-WEAK@max!` (even full power can't read it — too far / too much
+beer). Those warnings tell you it's a hardware-geometry issue, not software.
+
+You can still **fix** the power (disabling auto-tune) by passing it on the
+command line, e.g. `./run.sh 8`.
+
 ### The 3-second deadline
 
-At the default 60 ms sweep, three confirming sweeps commit a binding in well
-under one second. The 3 s in the spec is only the worst-case ceiling. Every
-commit prints its **actual** time-to-decision, and if a commit ever exceeds the
-3000 ms budget (e.g. very weak, beer-attenuated reads) it is flagged loudly so
-you can raise the power or lower `NEAR_FLOOR`.
+Once the power has settled (typically ~1 s of tuning at startup, instant
+thereafter), a binding commits in a few sweeps — a fraction of a second. Every
+commit prints its actual time-to-decision and the power it settled at, and flags
+any commit slower than the 3000 ms budget.
 
 ---
 
@@ -92,8 +108,8 @@ you can raise the power or lower `NEAR_FLOOR`.
 ```bash
 cd right-tag-arbiter
 chmod +x run.sh
-./run.sh            # default 100 mW on both antennas
-./run.sh 120        # override power (mW, 1..316)
+./run.sh            # AUTO-TUNING power (recommended)
+./run.sh 8          # FIX power at 8 mW (disables auto-tuning)
 ```
 
 `run.sh` fixes `/dev/ttyACM0` permissions if needed, compiles, then runs.
@@ -101,7 +117,7 @@ To build only:
 
 ```bash
 ./compile.sh
-./rfid_arbiter           # or  ./rfid_arbiter 120
+./rfid_arbiter           # auto-tuning;  or  ./rfid_arbiter 8  to fix power
 ./rfid_arbiter --help
 ```
 
@@ -109,65 +125,42 @@ To build only:
 
 ## What you see
 
-A fixed-slot live line (slot 0 = antenna 0, slot 1 = antenna 1) showing only the
-**committed owner** of each antenna, plus any tags still being decided:
+A live line showing the current power + tuning state, the **committed owner** of
+each antenna slot, and any tags still being decided (with their per-antenna hit
+counts):
 
 ```
-[TX=100 mW] [(0)  -58.3 dBm  ...A1234   | (1) ----                          ]   pending: ...B5678(1/3)
+[8 mW settled       ] [(0) ...A1234 -58dBm        | (1) ----                      ]
+[12 mW tuning down   ] [(0) ----                    | (1) ----                      ]   pending: ...471224[a0=4 a1=4/4](0/3)
 ```
 
 A prominent event line each time a binding is committed or released:
 
 ```
->> ANTENNA 0  OWNS  E2801160600002054E1AA1234   (decided in 0.30 s, margin 31.4 dB)
-<< ANTENNA 0  released  E2801160600002054E1AA1234
+>> ANTENNA 1  OWNS  E2801160600002054E1A471224   (decided in 0.42 s @ 8 mW, reads 4 vs 0)
+<< ANTENNA 1  released  E2801160600002054E1A471224
 ```
 
-- `margin` is how much the owning antenna beat the other (or `sole` if only one
-  antenna ever saw the tag).
 - Antenna 0 owners render green, antenna 1 owners red, the `(N)` marker yellow.
 
 ---
 
 ## Tuning (all at the top of `rfid_arbiter.c`)
 
+You normally don't need to touch anything — power is automatic. If you want to:
+
 | Macro | Default | Effect |
 |-------|---------|--------|
-| `DEFAULT_POWER_MW` | `5` | **The critical knob.** Must be low enough that only the near antenna reads. Find it with `rfid_probe` (below). Overridable on the command line. |
-| `READ_HI` | `0.60` | The winning antenna must read the tag at least this fraction of the time. |
-| `READ_LO` | `0.25` | The other antenna must read at most this fraction. Between `READ_LO` and `READ_HI` is treated as undecided. |
-| `INV_PER_SWEEP` | `5` | Inventories per antenna per sweep — the read-rate sample size. |
-| `CONFIRM_STREAK` | `4` | Consecutive decisive sweeps before committing. |
-| `RELEASE_MS` | `800` | How long a tag must be gone (both antennas) before the binding clears (mug removed). |
-| `SCAN_MS` | `30` | Sleep between full sweeps. |
-| `RATE_ALPHA` | `0.45` | EWMA weight for the newest sweep's read fraction. |
+| `POWER_START_MW` | `30` | Power the auto-tuner starts from before converging. |
+| `READ_MIN_HITS` | `3` | Of `INV_PER_SWEEP`, how many reads count as a "solid" read for the near antenna. |
+| `INV_PER_SWEEP` | `4` | Inventories per antenna per sweep. |
+| `CONFIRM_STREAK` | `3` | Consecutive decisive sweeps before committing. |
+| `RELEASE_MS` | `900` | How long a tag must be gone (both antennas) before the binding clears. |
+| `ADJUST_COOLDOWN_MS` | `110` | Minimum time between power steps (lets reads settle). |
+| `SCAN_MS` | `25` | Sleep between full sweeps. |
 
-## Finding the right power
-
-The method only works at a power where the **near** antenna reads but the
-**far** one is silent. Use the probe to find it:
-
-```bash
-./compile_probe.sh
-./rfid_probe 10        # watch the two per-source read counts
-./rfid_probe 5
-./rfid_probe 3
-```
-
-Put a mug over one antenna and step the power **down** until that antenna shows
-`reads=20/20` while the other shows `reads=0/20`. Use that value (or 1 mW above
-it for margin) as your power. Check the **other** antenna too — if the two
-ports differ, pick a power that gives a clean split for **both** positions.
-Then run:
-
-```bash
-./run.sh 5          # use the power you found
-```
-
-You should see `>> ANTENNA 0 OWNS ...` (or `ANTENNA 1`) within a fraction of a
-second and nothing on the other slot. If a tag stays `pending` with
-`BOTH-lower-power`, the power is too high; lower it. If commits are slow or a
-mug is missed, raise it by 1 mW.
+The `rfid_probe` tool is still useful to inspect the raw per-antenna behaviour
+(source→antenna mapping and read counts/RSSI at a chosen power).
 
 ---
 
