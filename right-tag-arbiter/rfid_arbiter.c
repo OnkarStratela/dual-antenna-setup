@@ -69,8 +69,8 @@
 //       is the only antenna that read the tag this sweep;
 //   (b) the candidate antenna's RSSI is >= NEAR_FLOOR_TENTHS, proving it is a
 //       genuinely close tag and not a faint long-range stray on the far port.
-#define MARGIN_TENTHS       80     // 8.0 dB dominance required (geometry gives ~47 dB)
-#define NEAR_FLOOR_TENTHS   (-720) // -72.0 dBm: a real ~10 cm read sits well above this
+#define MARGIN_TENTHS       40     // 4.0 dB dominance required (geometry gives ~47 dB)
+#define NEAR_FLOOR_TENTHS   (-900) // -90.0 dBm: permissive; raise once RSSI scale is confirmed
 #define CONFIRM_STREAK      3      // consecutive qualifying sweeps before committing
 #define RELEASE_MS          800    // absent this long (both antennas) => mug removed
 #define DECISION_BUDGET_MS  3000   // the spec ceiling; we warn if a commit is slower
@@ -179,7 +179,7 @@ static void inventory_into_tracks(CAENRFIDReader *reader, const char *source,
     uint16_t num_tags = 0;
 
     CAENRFIDErrorCodes ec = CAENRFID_InventoryTag(
-        reader, (char *)source, 0, 0, 0, NULL, 0, RSSI, &tag_list, &num_tags);
+        reader, (char *)source, 0, 0, 0, NULL, 0, RSSI | PHASE, &tag_list, &num_tags);
 
     node = tag_list;
     while (node != NULL) {
@@ -254,14 +254,29 @@ static void print_status(uint32_t power) {
     }
     printf("]");
 
-    // Append any tags that are present but not yet bound to an antenna.
+    // Append any tags that are present but not yet bound to an antenna, with a
+    // live readout of each antenna's RSSI and the gap between them, so it is
+    // obvious WHY a tag has not committed (too close to call, or too weak).
     bool any_pending = false;
     for (int i = 0; i < MAX_TRACKS; i++) {
-        if (tracks[i].used && tracks[i].owner == -1) {
-            if (!any_pending) { printf("   " YELLOW "pending:" RESET); any_pending = true; }
-            printf(" ...%s(%d/%d)", short_epc(tracks[i].epc),
-                   tracks[i].streak, CONFIRM_STREAK);
-        }
+        if (!(tracks[i].used && tracks[i].owner == -1)) continue;
+        const Track *t = &tracks[i];
+        if (!any_pending) { printf("   " YELLOW "pending:" RESET); any_pending = true; }
+
+        char a0[12], a1[12], gap[16];
+        if (t->seen_now[0]) snprintf(a0, sizeof a0, "%.1f", t->rssi_now[0] / 10.0);
+        else                snprintf(a0, sizeof a0, "  --");
+        if (t->seen_now[1]) snprintf(a1, sizeof a1, "%.1f", t->rssi_now[1] / 10.0);
+        else                snprintf(a1, sizeof a1, "  --");
+        if (t->seen_now[0] && t->seen_now[1])
+            snprintf(gap, sizeof gap, "d=%.1f",
+                     fabs((t->rssi_now[0] - t->rssi_now[1]) / 10.0));
+        else if (t->seen_now[0]) snprintf(gap, sizeof gap, "sole0");
+        else if (t->seen_now[1]) snprintf(gap, sizeof gap, "sole1");
+        else                     snprintf(gap, sizeof gap, "miss");
+
+        printf(" ...%s[a0=%s a1=%s %s](%d/%d)",
+               short_epc(t->epc), a0, a1, gap, t->streak, CONFIRM_STREAK);
     }
     printf("\n");
     fflush(stdout);
