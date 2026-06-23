@@ -25,23 +25,31 @@ it side-by-side or drop it on the Pi on its own.
 
 ---
 
-## Why this is reliably solvable
+## Why this is reliably solvable — and why we use READ-RATE, not RSSI
 
-The owning antenna sits ~10 cm from the tag; the other antenna is ~150 cm away.
-RFID is a round-trip link, so the path-loss *difference* between the two
-antennas is approximately:
+Bench measurement on this exact rig (with the `rfid_probe` tool), one mug over
+antenna 1:
 
-```
-2 × 20·log10(150 / 10) ≈ 47 dB
-```
+| Power | Source_0 / Ant0 | Source_1 / Ant1 |
+|------:|-----------------|-----------------|
+| 30 mW | −61 dBm, 20/20  | −57 dBm, 20/20  |
+| 10 mW | −62 dBm, 20/20  | −58 dBm, 20/20  |
+| **5 mW** | **0/20 (silent)** | −59 dBm, **20/20** |
 
-That is an enormous, unambiguous gap. The crucial consequence for the beer:
-water heavily attenuates 915 MHz, **but it attenuates both antenna paths by a
-similar amount**, so the *difference* between the two antennas barely changes.
+Two things this proves:
 
-**Therefore the arbiter never decides on an absolute signal level — it decides
-on which antenna is _relatively_ stronger.** That is what stays correct whether
-the tray is dry or half full of beer.
+1. The two antennas differ by only a **fixed ~4 dB** that does **not** change
+   with mug position — it is a cable/gain bias, not proximity. So an RSSI
+   *margin* cannot tell which antenna a mug is over. (That approach was tried
+   and always picked the same antenna.)
+2. At **low power the far antenna stops reading entirely** while the near one
+   still reads at full rate. That is a clean, binary split.
+
+**So the arbiter decides on PRESENCE / READ-RATE: whichever antenna actually
+reads the tag (while the other does not) owns it.** Keying on *whether a read
+happens* rather than *how strong it is* also automatically cancels the 4 dB
+bias. The whole method depends on running at a power low enough that only the
+near antenna reads — see "Finding the right power" below.
 
 ---
 
@@ -56,19 +64,13 @@ State machine per EPC:
 
 1. **Deciding** — every sweep it polls both antennas and picks the candidate
    owner = the stronger antenna (or the only antenna that read it).
-2. **Commit** — the candidate is locked in once **the same antenna stays the
-   stronger reader** for `CONFIRM_STREAK` consecutive sweeps. The comparison
-   uses *smoothed* RSSI and only needs a small lead (≥ `MIN_MARGIN` dB, or the
-   antenna being the sole reader). Crucially, a near-tie sweep just **holds**
-   the count and only the winner *flipping* resets it — so a small-but-stable
-   few-dB lead reliably accumulates into a decision.
-
-   > Real-world note: at high power both antennas hear the same tag and the
-   > owning antenna may lead by only ~3 dB — but that lead is perfectly stable
-   > in direction, which is exactly what this rule keys on. Lowering power
-   > makes the far antenna stop hearing the near mug entirely (a clean "sole"
-   > read), which is the most robust regime when the antennas really are far
-   > apart.
+2. **Commit** — the candidate is locked in once **one antenna dominates the
+   reads** — its read-rate ≥ `READ_HI` while the other's ≤ `READ_LO` — for
+   `CONFIRM_STREAK` consecutive sweeps. Each sweep fires `INV_PER_SWEEP`
+   inventories per antenna; the fraction that see the tag feeds a smoothed
+   read-rate per antenna. If **both** antennas keep reading the tag (power too
+   high to separate) the tag stays **pending** and the live line shows
+   `BOTH-lower-power` so you know to drop the power.
 3. **Latched** — once owned, the binding is held. Reads of that EPC on the
    *other* antenna are ignored, so no live flips, so no overlap.
 4. **Release** — when the tag is seen by **neither** antenna for `RELEASE_MS`
@@ -131,25 +133,41 @@ A prominent event line each time a binding is committed or released:
 
 | Macro | Default | Effect |
 |-------|---------|--------|
-| `DEFAULT_POWER_MW` | `100` | Lower power tightens each antenna's read zone — at a true 150 cm spacing this gives clean "sole" reads (the most robust case). Raise it only if reads through beer are unreliable. Overridable on the command line. |
-| `MIN_MARGIN_TENTHS` | `10` (1.0 dB) | Minimum lead (on smoothed RSSI) to call a winner for a sweep. Below this the antennas are treated as tied and the count is held, not reset. Raise it if a static gain/cable imbalance biases one antenna. |
-| `NEAR_FLOOR_TENTHS` | `-900` (−90.0 dBm) | Permissive sanity floor on the winning antenna; a winner weaker than this is ignored. |
-| `CONFIRM_STREAK` | `5` | Consecutive sweeps the same antenna must stay the stronger reader before committing. Raise for more caution with small margins, lower for faster commits. |
-| `RELEASE_MS` | `800` | How long a tag must be gone before the binding clears (mug removed). |
-| `SCAN_MS` | `60` | Time between full Source_0→Source_1 sweeps. |
-| `DECISION_BUDGET_MS` | `3000` | The spec ceiling used only to flag slow commits. |
+| `DEFAULT_POWER_MW` | `5` | **The critical knob.** Must be low enough that only the near antenna reads. Find it with `rfid_probe` (below). Overridable on the command line. |
+| `READ_HI` | `0.60` | The winning antenna must read the tag at least this fraction of the time. |
+| `READ_LO` | `0.25` | The other antenna must read at most this fraction. Between `READ_LO` and `READ_HI` is treated as undecided. |
+| `INV_PER_SWEEP` | `5` | Inventories per antenna per sweep — the read-rate sample size. |
+| `CONFIRM_STREAK` | `4` | Consecutive decisive sweeps before committing. |
+| `RELEASE_MS` | `800` | How long a tag must be gone (both antennas) before the binding clears (mug removed). |
+| `SCAN_MS` | `30` | Sleep between full sweeps. |
+| `RATE_ALPHA` | `0.45` | EWMA weight for the newest sweep's read fraction. |
 
-### Recommended first run
+## Finding the right power
 
-1. Start with the defaults (`./run.sh`).
-2. Place a mug on antenna 0's spot. You should see
-   `>> ANTENNA 0 OWNS ...` within a fraction of a second, and **nothing** on
-   antenna 1. Repeat on antenna 1.
-3. If a commit is ever slow or flagged over budget, raise power
-   (`./run.sh 150`) or lower `NEAR_FLOOR_TENTHS`.
-4. If you ever saw the far antenna try to claim a tag (it should not at 150 cm),
-   raise `MARGIN_TENTHS` — but with this geometry you will have tens of dB to
-   spare.
+The method only works at a power where the **near** antenna reads but the
+**far** one is silent. Use the probe to find it:
+
+```bash
+./compile_probe.sh
+./rfid_probe 10        # watch the two per-source read counts
+./rfid_probe 5
+./rfid_probe 3
+```
+
+Put a mug over one antenna and step the power **down** until that antenna shows
+`reads=20/20` while the other shows `reads=0/20`. Use that value (or 1 mW above
+it for margin) as your power. Check the **other** antenna too — if the two
+ports differ, pick a power that gives a clean split for **both** positions.
+Then run:
+
+```bash
+./run.sh 5          # use the power you found
+```
+
+You should see `>> ANTENNA 0 OWNS ...` (or `ANTENNA 1`) within a fraction of a
+second and nothing on the other slot. If a tag stays `pending` with
+`BOTH-lower-power`, the power is too high; lower it. If commits are slow or a
+mug is missed, raise it by 1 mW.
 
 ---
 
@@ -157,7 +175,9 @@ A prominent event line each time a binding is committed or released:
 
 | File | Purpose |
 |------|---------|
-| `rfid_arbiter.c` | The arbiter (commit-and-latch state machine) |
-| `compile.sh` | Builds against the bundled `SRC/` |
-| `run.sh` | Fixes USB perms, compiles, runs (accepts optional power arg) |
+| `rfid_arbiter.c` | The arbiter (read-rate presence, commit-and-latch) |
+| `rfid_probe.c` | Hardware probe: source→antenna mapping + per-source read count/RSSI; use it to find the right power |
+| `compile.sh` | Builds the arbiter against the bundled `SRC/` |
+| `compile_probe.sh` | Builds the probe |
+| `run.sh` | Fixes USB perms, compiles the arbiter, runs (accepts optional power arg) |
 | `SRC/` | Bundled copy of the CAEN "Light" library (independent of the parent folder) |
