@@ -56,12 +56,19 @@ State machine per EPC:
 
 1. **Deciding** — every sweep it polls both antennas and picks the candidate
    owner = the stronger antenna (or the only antenna that read it).
-2. **Commit** — the candidate is locked in once it has, for `CONFIRM_STREAK`
-   consecutive sweeps, satisfied **both**:
-   - **(a) dominance:** stronger than the other antenna by ≥ `MARGIN` dB, *or*
-     it is the only antenna that read the tag, **and**
-   - **(b) near-presence:** its own RSSI is ≥ `NEAR_FLOOR` dBm — this rejects a
-     faint long-range stray sneaking in on the far antenna.
+2. **Commit** — the candidate is locked in once **the same antenna stays the
+   stronger reader** for `CONFIRM_STREAK` consecutive sweeps. The comparison
+   uses *smoothed* RSSI and only needs a small lead (≥ `MIN_MARGIN` dB, or the
+   antenna being the sole reader). Crucially, a near-tie sweep just **holds**
+   the count and only the winner *flipping* resets it — so a small-but-stable
+   few-dB lead reliably accumulates into a decision.
+
+   > Real-world note: at high power both antennas hear the same tag and the
+   > owning antenna may lead by only ~3 dB — but that lead is perfectly stable
+   > in direction, which is exactly what this rule keys on. Lowering power
+   > makes the far antenna stop hearing the near mug entirely (a clean "sole"
+   > read), which is the most robust regime when the antennas really are far
+   > apart.
 3. **Latched** — once owned, the binding is held. Reads of that EPC on the
    *other* antenna are ignored, so no live flips, so no overlap.
 4. **Release** — when the tag is seen by **neither** antenna for `RELEASE_MS`
@@ -124,10 +131,10 @@ A prominent event line each time a binding is committed or released:
 
 | Macro | Default | Effect |
 |-------|---------|--------|
-| `DEFAULT_POWER_MW` | `100` | Higher = more reliable reads through beer. Separation does **not** depend on this (it is relative), so prefer enough power for solid reads. Also overridable on the command line. |
-| `MARGIN_TENTHS` | `80` (8.0 dB) | Dominance required to pick a winner when *both* antennas see a tag. The geometry gives ~47 dB, so 8 dB is a safe, fade-tolerant threshold. |
-| `NEAR_FLOOR_TENTHS` | `-720` (−72.0 dBm) | A genuine ~10 cm read sits well above this. Lower it only if heavy beer attenuation makes even the owning antenna read weaker than −72 dBm (watch for the "budget exceeded" warning). |
-| `CONFIRM_STREAK` | `3` | Consecutive qualifying sweeps before committing. Raise for more caution, lower for faster commits. |
+| `DEFAULT_POWER_MW` | `100` | Lower power tightens each antenna's read zone — at a true 150 cm spacing this gives clean "sole" reads (the most robust case). Raise it only if reads through beer are unreliable. Overridable on the command line. |
+| `MIN_MARGIN_TENTHS` | `10` (1.0 dB) | Minimum lead (on smoothed RSSI) to call a winner for a sweep. Below this the antennas are treated as tied and the count is held, not reset. Raise it if a static gain/cable imbalance biases one antenna. |
+| `NEAR_FLOOR_TENTHS` | `-900` (−90.0 dBm) | Permissive sanity floor on the winning antenna; a winner weaker than this is ignored. |
+| `CONFIRM_STREAK` | `5` | Consecutive sweeps the same antenna must stay the stronger reader before committing. Raise for more caution with small margins, lower for faster commits. |
 | `RELEASE_MS` | `800` | How long a tag must be gone before the binding clears (mug removed). |
 | `SCAN_MS` | `60` | Time between full Source_0→Source_1 sweeps. |
 | `DECISION_BUDGET_MS` | `3000` | The spec ceiling used only to flag slow commits. |

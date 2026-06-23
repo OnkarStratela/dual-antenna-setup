@@ -64,14 +64,16 @@
 #define MAX_TRACKS          32             // distinct EPCs tracked at once
 
 // --- Arbitration tuning (see README for the reasoning behind each value) ---
-// A commit needs ALL of the following, held for CONFIRM_STREAK sweeps:
-//   (a) the candidate antenna dominates the other by >= MARGIN_TENTHS, OR it
-//       is the only antenna that read the tag this sweep;
-//   (b) the candidate antenna's RSSI is >= NEAR_FLOOR_TENTHS, proving it is a
-//       genuinely close tag and not a faint long-range stray on the far port.
-#define MARGIN_TENTHS       40     // 4.0 dB dominance required (geometry gives ~47 dB)
-#define NEAR_FLOOR_TENTHS   (-900) // -90.0 dBm: permissive; raise once RSSI scale is confirmed
-#define CONFIRM_STREAK      3      // consecutive qualifying sweeps before committing
+// Real-world finding: at high power BOTH antennas hear the same tag, and the
+// owning antenna leads only by a few dB -- but that lead is perfectly STABLE
+// in direction. So we decide on the *consistent winner*, not a large gap:
+// the same antenna must remain the stronger reader (using smoothed RSSI, by
+// at least MIN_MARGIN_TENTHS, or be the sole reader) for CONFIRM_STREAK
+// consecutive sweeps. A "tie" sweep (gap below the minimum) simply holds the
+// current count rather than resetting it; only the winner flipping resets it.
+#define MIN_MARGIN_TENTHS   10     // 1.0 dB: enough to call a winner; rejects a dead tie
+#define NEAR_FLOOR_TENTHS   (-900) // -90.0 dBm: permissive sanity floor on the winner
+#define CONFIRM_STREAK      5      // consecutive sweeps the same antenna must lead
 #define RELEASE_MS          800    // absent this long (both antennas) => mug removed
 #define DECISION_BUDGET_MS  3000   // the spec ceiling; we warn if a commit is slower
 #define RSSI_EWMA_ALPHA     0.40   // display-only smoothing of RSSI
@@ -308,34 +310,30 @@ static void arbitrate(Track *t, uint64_t now) {
     // Already latched: hold it. No live flips => overlap is impossible.
     if (t->owner != -1) return;
 
-    // ---- pick this sweep's candidate and its dominance margin ----
+    // ---- pick this sweep's winner from the SMOOTHED per-antenna RSSI ----
+    // Smoothing matters here: the lead is only a few dB, so we filter noise
+    // before comparing rather than reacting to a single jittery sample.
     int    cand;
-    double margin_db;
-    int16_t cand_rssi;
+    double margin_db;       // dB the winner leads by (INFINITY if sole reader)
+    double cand_rssi_db;    // smoothed RSSI of the winning antenna
     if (s0 && s1) {
-        if (t->rssi_now[0] >= t->rssi_now[1]) {
-            cand = 0; cand_rssi = t->rssi_now[0];
-            margin_db = (t->rssi_now[0] - t->rssi_now[1]) / 10.0;
-        } else {
-            cand = 1; cand_rssi = t->rssi_now[1];
-            margin_db = (t->rssi_now[1] - t->rssi_now[0]) / 10.0;
-        }
+        double d0 = t->rssi_disp[0], d1 = t->rssi_disp[1];
+        if (d0 >= d1) { cand = 0; cand_rssi_db = d0; margin_db = d0 - d1; }
+        else          { cand = 1; cand_rssi_db = d1; margin_db = d1 - d0; }
     } else if (s0) {
-        cand = 0; cand_rssi = t->rssi_now[0]; margin_db = INFINITY;
+        cand = 0; cand_rssi_db = t->rssi_disp[0]; margin_db = INFINITY;
     } else {
-        cand = 1; cand_rssi = t->rssi_now[1]; margin_db = INFINITY;
+        cand = 1; cand_rssi_db = t->rssi_disp[1]; margin_db = INFINITY;
     }
 
-    bool dominant     = isinf(margin_db) || (margin_db * 10.0 >= MARGIN_TENTHS);
-    bool close_enough = (cand_rssi >= NEAR_FLOOR_TENTHS);
-    bool qualifies    = dominant && close_enough;
+    // Winner too weak to trust at all -> hold the count, do not reset.
+    if (cand_rssi_db < NEAR_FLOOR_TENTHS / 10.0) return;
 
-    if (!qualifies) {                   // ambiguous or too faint -> reset confidence
-        t->streak = 0;
-        t->candidate = -1;
-        return;
-    }
+    // Antennas essentially tied this sweep -> not decisive, hold the count.
+    if (!isinf(margin_db) && margin_db < MIN_MARGIN_TENTHS / 10.0) return;
 
+    // Decisive for `cand`. Only the winner CHANGING restarts the count, so a
+    // stable few-dB lead steadily accumulates confidence toward a commit.
     if (cand == t->candidate) t->streak++;
     else { t->candidate = cand; t->streak = 1; }
 
@@ -388,9 +386,9 @@ int main(int argc, char **argv) {
     printf("Port      : %s @ %d baud\n", GC_PORT, GC_BAUDRATE);
     printf("Power     : %u mW (both antennas)\n", power);
     printf("Sweep     : %d ms\n", SCAN_MS);
-    printf("Commit when: dominates by >= %.1f dB (or sole reader) AND >= %.1f dBm,\n",
-           MARGIN_TENTHS / 10.0, NEAR_FLOOR_TENTHS / 10.0);
-    printf("            held for %d consecutive sweeps; released after %d ms absent.\n\n",
+    printf("Commit when: one antenna stays the stronger reader (by >= %.1f dB,"
+           " or sole)\n", MIN_MARGIN_TENTHS / 10.0);
+    printf("            for %d consecutive sweeps; released after %d ms absent.\n\n",
            CONFIRM_STREAK, RELEASE_MS);
 
     printf("[ARB] Connecting...\n");
